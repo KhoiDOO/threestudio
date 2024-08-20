@@ -7,6 +7,11 @@ from omegaconf import OmegaConf
 import threestudio
 from threestudio.utils.typing import *
 
+import wandb
+
+def time_string():
+    return datetime.now().strftime("%m_%d_%Y_%H_%M_%S")
+
 # ============ Register OmegaConf Recolvers ============= #
 OmegaConf.register_new_resolver(
     "calc_exp_lr_decay_rate", lambda factor, n: factor ** (1.0 / n)
@@ -22,10 +27,31 @@ OmegaConf.register_new_resolver("tuple2", lambda s: [float(s), float(s)])
 OmegaConf.register_new_resolver("gt0", lambda s: s > 0)
 OmegaConf.register_new_resolver("cmaxgt0", lambda s: C_max(s) > 0)
 OmegaConf.register_new_resolver("not", lambda s: not s)
-OmegaConf.register_new_resolver(
-    "cmaxgt0orcmaxgt0", lambda a, b: C_max(a) > 0 or C_max(b) > 0
-)
+OmegaConf.register_new_resolver("cmaxgt0orcmaxgt0", lambda a, b: C_max(a) > 0 or C_max(b) > 0)
+OmegaConf.register_new_resolver("time", time_string)
 # ======================================================= #
+
+
+def cfg_update_wandb(system, cfg_dict):
+    __loggers = system.get_loggers()
+    if len(__loggers) > 0:
+        __wb_logger = __loggers[0]
+        __wb_logger.experiment.config.update(cfg_dict)
+        # __wb_logger.experiment.update()
+    else:
+        print('wandb not in use')
+
+
+def get_dict_omega(omega_conf, flatten=False):
+    nested_dict = OmegaConf.to_container(omega_conf, resolve=True)
+
+    if flatten:
+        from pandas import json_normalize
+        df = json_normalize(nested_dict, sep='.')
+        flatten_dict = df.to_dict(orient='records')[0]
+        return flatten_dict
+    else:
+        return nested_dict
 
 
 def C_max(value: Any) -> float:

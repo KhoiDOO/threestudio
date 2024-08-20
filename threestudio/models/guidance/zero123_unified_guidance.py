@@ -284,7 +284,7 @@ class Zero123UnifiedGuidance(BaseModule):
 
         return image_camera_embeddings
 
-    @torch.cuda.amp.autocast(enabled=False)
+    @torch.amp.autocast('cuda', enabled=False)
     def forward_unet(
         self,
         unet: UNet2DConditionModel,
@@ -313,7 +313,7 @@ class Zero123UnifiedGuidance(BaseModule):
             ].view(-1, 1, 1, 1)
         return pred.to(input_dtype)
 
-    @torch.cuda.amp.autocast(enabled=False)
+    @torch.amp.autocast('cuda', enabled=False)
     def vae_encode(
         self, vae: AutoencoderKL, imgs: Float[Tensor, "B 3 H W"], mode=False
     ) -> Float[Tensor, "B 4 Hl Wl"]:
@@ -327,7 +327,7 @@ class Zero123UnifiedGuidance(BaseModule):
         latents = latents * vae.config.scaling_factor
         return latents.to(input_dtype)
 
-    @torch.cuda.amp.autocast(enabled=False)
+    @torch.amp.autocast('cuda', enabled=False)
     def vae_decode(
         self, vae: AutoencoderKL, latents: Float[Tensor, "B 4 Hl Wl"]
     ) -> Float[Tensor, "B 3 H W"]:

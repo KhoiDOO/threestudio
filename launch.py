@@ -140,7 +140,7 @@ def main(args, extras) -> None:
         CustomProgressBar,
         ProgressCallback,
     )
-    from threestudio.utils.config import ExperimentConfig, load_config
+    from threestudio.utils.config import ExperimentConfig, load_config, get_dict_omega, cfg_update_wandb
     from threestudio.utils.misc import get_rank
     from threestudio.utils.typing import Optional
 
@@ -161,15 +161,19 @@ def main(args, extras) -> None:
     # parse YAML config to OmegaConf
     cfg: ExperimentConfig
     cfg = load_config(args.config, cli_args=extras, n_gpus=n_gpus)
+    cfg_dict = get_dict_omega(cfg, flatten=True) # flattened dict
 
     # set a different seed for each device
     pl.seed_everything(cfg.seed + get_rank(), workers=True)
-
+    
+    # setup system
+    print(f'Trial Dir: {cfg.trial_dir}')
     dm = threestudio.find(cfg.data_type)(cfg.data)
     system: BaseSystem = threestudio.find(cfg.system_type)(
         cfg.system, resumed=cfg.resume is not None
     )
     system.set_save_dir(os.path.join(cfg.trial_dir, "save"))
+    # print(cfg_dict)
 
     if args.gradio:
         fh = logging.FileHandler(os.path.join(cfg.trial_dir, "logs"))
@@ -233,6 +237,9 @@ def main(args, extras) -> None:
         devices=devices,
         **cfg.trainer,
     )
+
+    # update config for wandb
+    cfg_update_wandb(system, cfg_dict)
 
     def set_system_status(system: BaseSystem, ckpt_path: Optional[str]):
         if ckpt_path is None:
