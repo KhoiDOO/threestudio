@@ -64,8 +64,9 @@ system:
 
   loggers:
     wandb:
-      enable: false
+      enable: true
       project: 'threestudio'
+      name: ${time:}
 
   loss:
     lambda_sds: 0.

@@ -92,9 +92,9 @@ system:
 
   loggers:
     wandb:
-      enable: false
+      enable: true
       project: "threestudio"
-      name: None
+      name: ${time:}
 
   loss:
     lambda_rgb: 1000.
