@@ -53,9 +53,7 @@ class StableDiffusionGuidance(BaseObject):
     def configure(self) -> None:
         threestudio.info(f"Loading Stable Diffusion ...")
 
-        self.weights_dtype = (
-            torch.float16 if self.cfg.half_precision_weights else torch.float32
-        )
+        self.weights_dtype = torch.float16 if self.cfg.half_precision_weights else torch.float32
 
         pipe_kwargs = {
             "tokenizer": None,
@@ -144,23 +142,12 @@ class StableDiffusionGuidance(BaseObject):
         self.max_step = int(self.num_train_timesteps * max_step_percent)
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward_unet(
-        self,
-        latents: Float[Tensor, "..."],
-        t: Float[Tensor, "..."],
-        encoder_hidden_states: Float[Tensor, "..."],
-    ) -> Float[Tensor, "..."]:
+    def forward_unet(self, latents: Float[Tensor, "..."], t: Float[Tensor, "..."], encoder_hidden_states: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         input_dtype = latents.dtype
-        return self.unet(
-            latents.to(self.weights_dtype),
-            t.to(self.weights_dtype),
-            encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
-        ).sample.to(input_dtype)
+        return self.unet(latents.to(self.weights_dtype), t.to(self.weights_dtype), encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype)).sample.to(input_dtype)
 
     @torch.amp.autocast('cuda', enabled=False)
-    def encode_images(
-        self, imgs: Float[Tensor, "B 3 512 512"]
-    ) -> Float[Tensor, "B 4 64 64"]:
+    def encode_images(self, imgs: Float[Tensor, "B 3 512 512"]) -> Float[Tensor, "B 4 64 64"]:
         input_dtype = imgs.dtype
         imgs = imgs * 2.0 - 1.0
         posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
@@ -168,49 +155,27 @@ class StableDiffusionGuidance(BaseObject):
         return latents.to(input_dtype)
 
     @torch.amp.autocast('cuda', enabled=False)
-    def decode_latents(
-        self,
-        latents: Float[Tensor, "B 4 H W"],
-        latent_height: int = 64,
-        latent_width: int = 64,
-    ) -> Float[Tensor, "B 3 512 512"]:
+    def decode_latents(self, latents: Float[Tensor, "B 4 H W"], latent_height: int = 64, latent_width: int = 64) -> Float[Tensor, "B 3 512 512"]:
         input_dtype = latents.dtype
-        latents = F.interpolate(
-            latents, (latent_height, latent_width), mode="bilinear", align_corners=False
-        )
+        latents = F.interpolate(latents, (latent_height, latent_width), mode="bilinear", align_corners=False)
         latents = 1 / self.vae.config.scaling_factor * latents
         image = self.vae.decode(latents.to(self.weights_dtype)).sample
         image = (image * 0.5 + 0.5).clamp(0, 1)
         return image.to(input_dtype)
 
-    def compute_grad_sds(
-        self,
-        latents: Float[Tensor, "B 4 64 64"],
-        image: Float[Tensor, "B 3 512 512"],
-        t: Int[Tensor, "B"],
-        prompt_utils: PromptProcessorOutput,
-        elevation: Float[Tensor, "B"],
-        azimuth: Float[Tensor, "B"],
-        camera_distances: Float[Tensor, "B"],
-    ):
+    def compute_grad_sds(self, latents: Float[Tensor, "B 4 64 64"], image: Float[Tensor, "B 3 512 512"],
+        t: Int[Tensor, "B"], prompt_utils: PromptProcessorOutput, elevation: Float[Tensor, "B"], azimuth: Float[Tensor, "B"], 
+        camera_distances: Float[Tensor, "B"]):
+
         batch_size = elevation.shape[0]
 
         if prompt_utils.use_perp_neg:
-            (
-                text_embeddings,
-                neg_guidance_weights,
-            ) = prompt_utils.get_text_embeddings_perp_neg(
-                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
-            )
+            text_embeddings, neg_guidance_weights = prompt_utils.get_text_embeddings_perp_neg(elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting)
             with torch.no_grad():
                 noise = torch.randn_like(latents)
                 latents_noisy = self.scheduler.add_noise(latents, noise, t)
                 latent_model_input = torch.cat([latents_noisy] * 4, dim=0)
-                noise_pred = self.forward_unet(
-                    latent_model_input,
-                    torch.cat([t] * 4),
-                    encoder_hidden_states=text_embeddings,
-                )  # (4B, 3, 64, 64)
+                noise_pred = self.forward_unet(latent_model_input, torch.cat([t] * 4), encoder_hidden_states=text_embeddings)  # (4B, 3, 64, 64)
 
             noise_pred_text = noise_pred[:batch_size]
             noise_pred_uncond = noise_pred[batch_size : batch_size * 2]
@@ -221,18 +186,12 @@ class StableDiffusionGuidance(BaseObject):
             n_negative_prompts = neg_guidance_weights.shape[-1]
             for i in range(n_negative_prompts):
                 e_i_neg = noise_pred_neg[i::n_negative_prompts] - noise_pred_uncond
-                accum_grad += neg_guidance_weights[:, i].view(
-                    -1, 1, 1, 1
-                ) * perpendicular_component(e_i_neg, e_pos)
+                accum_grad += neg_guidance_weights[:, i].view(-1, 1, 1, 1) * perpendicular_component(e_i_neg, e_pos)
 
-            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-                e_pos + accum_grad
-            )
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (e_pos + accum_grad)
         else:
             neg_guidance_weights = None
-            text_embeddings = prompt_utils.get_text_embeddings(
-                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
-            )
+            text_embeddings = prompt_utils.get_text_embeddings(elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting)
             # predict the noise residual with unet, NO grad!
             with torch.no_grad():
                 # add noise
@@ -240,17 +199,11 @@ class StableDiffusionGuidance(BaseObject):
                 latents_noisy = self.scheduler.add_noise(latents, noise, t)
                 # pred noise
                 latent_model_input = torch.cat([latents_noisy] * 2, dim=0)
-                noise_pred = self.forward_unet(
-                    latent_model_input,
-                    torch.cat([t] * 2),
-                    encoder_hidden_states=text_embeddings,
-                )
+                noise_pred = self.forward_unet(latent_model_input,torch.cat([t] * 2), encoder_hidden_states=text_embeddings)
 
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
-                noise_pred_text - noise_pred_uncond
-            )
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -260,9 +213,7 @@ class StableDiffusionGuidance(BaseObject):
         elif self.cfg.weighting_strategy == "fantasia3d":
             w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
         else:
-            raise ValueError(
-                f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
-            )
+            raise ValueError(f"Unknown weighting strategy: {self.cfg.weighting_strategy}")
 
         alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
         sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
@@ -287,27 +238,15 @@ class StableDiffusionGuidance(BaseObject):
 
         return grad, grad_img, guidance_eval_utils
 
-    def compute_grad_sjc(
-        self,
-        latents: Float[Tensor, "B 4 64 64"],
-        t: Int[Tensor, "B"],
-        prompt_utils: PromptProcessorOutput,
-        elevation: Float[Tensor, "B"],
-        azimuth: Float[Tensor, "B"],
-        camera_distances: Float[Tensor, "B"],
-    ):
+    def compute_grad_sjc(self,latents: Float[Tensor, "B 4 64 64"], t: Int[Tensor, "B"], prompt_utils: PromptProcessorOutput, elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"], camera_distances: Float[Tensor, "B"]):
         batch_size = elevation.shape[0]
 
         sigma = self.us[t]
         sigma = sigma.view(-1, 1, 1, 1)
 
         if prompt_utils.use_perp_neg:
-            (
-                text_embeddings,
-                neg_guidance_weights,
-            ) = prompt_utils.get_text_embeddings_perp_neg(
-                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
-            )
+            text_embeddings, neg_guidance_weights= prompt_utils.get_text_embeddings_perp_neg(elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting)
             with torch.no_grad():
                 noise = torch.randn_like(latents)
                 y = latents
@@ -315,11 +254,7 @@ class StableDiffusionGuidance(BaseObject):
                 scaled_zs = zs / torch.sqrt(1 + sigma**2)
                 # pred noise
                 latent_model_input = torch.cat([scaled_zs] * 4, dim=0)
-                noise_pred = self.forward_unet(
-                    latent_model_input,
-                    torch.cat([t] * 4),
-                    encoder_hidden_states=text_embeddings,
-                )  # (4B, 3, 64, 64)
+                noise_pred = self.forward_unet(latent_model_input, torch.cat([t] * 4), encoder_hidden_states=text_embeddings)  # (4B, 3, 64, 64)
 
             noise_pred_text = noise_pred[:batch_size]
             noise_pred_uncond = noise_pred[batch_size : batch_size * 2]
@@ -330,18 +265,12 @@ class StableDiffusionGuidance(BaseObject):
             n_negative_prompts = neg_guidance_weights.shape[-1]
             for i in range(n_negative_prompts):
                 e_i_neg = noise_pred_neg[i::n_negative_prompts] - noise_pred_uncond
-                accum_grad += neg_guidance_weights[:, i].view(
-                    -1, 1, 1, 1
-                ) * perpendicular_component(e_i_neg, e_pos)
+                accum_grad += neg_guidance_weights[:, i].view(-1, 1, 1, 1) * perpendicular_component(e_i_neg, e_pos)
 
-            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-                e_pos + accum_grad
-            )
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (e_pos + accum_grad)
         else:
             neg_guidance_weights = None
-            text_embeddings = prompt_utils.get_text_embeddings(
-                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
-            )
+            text_embeddings = prompt_utils.get_text_embeddings(elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting)
             # predict the noise residual with unet, NO grad!
             with torch.no_grad():
                 # add noise
@@ -383,56 +312,28 @@ class StableDiffusionGuidance(BaseObject):
 
         return grad, guidance_eval_utils
 
-    def __call__(
-        self,
-        rgb: Float[Tensor, "B H W C"],
-        prompt_utils: PromptProcessorOutput,
-        elevation: Float[Tensor, "B"],
-        azimuth: Float[Tensor, "B"],
-        camera_distances: Float[Tensor, "B"],
-        rgb_as_latents=False,
-        guidance_eval=False,
-        **kwargs,
-    ):
+    def __call__(self, rgb: Float[Tensor, "B H W C"], prompt_utils: PromptProcessorOutput, elevation: Float[Tensor, "B"], azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"], rgb_as_latents=False, guidance_eval=False, **kwargs):
         batch_size = rgb.shape[0]
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         latents: Float[Tensor, "B 4 64 64"]
-        rgb_BCHW_512 = F.interpolate(
-            rgb_BCHW, (512, 512), mode="bilinear", align_corners=False
-        )
+        rgb_BCHW_512 = F.interpolate(rgb_BCHW, (512, 512), mode="bilinear", align_corners=False)
         if rgb_as_latents:
-            latents = F.interpolate(
-                rgb_BCHW, (64, 64), mode="bilinear", align_corners=False
-            )
+            latents = F.interpolate(rgb_BCHW, (64, 64), mode="bilinear", align_corners=False)
         else:
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
 
         # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
-        t = torch.randint(
-            self.min_step,
-            self.max_step + 1,
-            [batch_size],
-            dtype=torch.long,
-            device=self.device,
-        )
-
+        t = torch.randint(self.min_step, self.max_step + 1, [batch_size], dtype=torch.long, device=self.device)
+        
+        # text embedding is handled inside this function
         if self.cfg.use_sjc:
-            grad, guidance_eval_utils = self.compute_grad_sjc(
-                latents, t, prompt_utils, elevation, azimuth, camera_distances
-            )
+            grad, guidance_eval_utils = self.compute_grad_sjc(latents, t, prompt_utils, elevation, azimuth, camera_distances)
             grad_img = torch.tensor([0.0], dtype=grad.dtype).to(grad.device)
         else:
-            grad, grad_img, guidance_eval_utils = self.compute_grad_sds(
-                latents,
-                rgb_BCHW_512,
-                t,
-                prompt_utils,
-                elevation,
-                azimuth,
-                camera_distances,
-            )
+            grad, grad_img, guidance_eval_utils = self.compute_grad_sds(latents, rgb_BCHW_512, t, prompt_utils, elevation, azimuth, camera_distances)
 
         grad = torch.nan_to_num(grad)
 
@@ -446,32 +347,21 @@ class StableDiffusionGuidance(BaseObject):
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         loss_sds = 0.5 * F.mse_loss(latents, target, reduction="sum") / batch_size
 
-        guidance_out = {
-            "loss_sds": loss_sds,
-            "grad_norm": grad.norm(),
-            "min_step": self.min_step,
-            "max_step": self.max_step,
-        }
+        guidance_out = {"loss_sds": loss_sds, "grad_norm": grad.norm(), "min_step": self.min_step, "max_step": self.max_step}
 
         if self.cfg.use_img_loss:
             grad_img = torch.nan_to_num(grad_img)
             if self.grad_clip_val is not None:
                 grad_img = grad_img.clamp(-self.grad_clip_val, self.grad_clip_val)
             target_img = (rgb_BCHW_512 - grad_img).detach()
-            loss_sds_img = (
-                0.5 * F.mse_loss(rgb_BCHW_512, target_img, reduction="sum") / batch_size
-            )
+            loss_sds_img = 0.5 * F.mse_loss(rgb_BCHW_512, target_img, reduction="sum") / batch_size
             guidance_out["loss_sds_img"] = loss_sds_img
 
         if guidance_eval:
             guidance_eval_out = self.guidance_eval(**guidance_eval_utils)
             texts = []
-            for n, e, a, c in zip(
-                guidance_eval_out["noise_levels"], elevation, azimuth, camera_distances
-            ):
-                texts.append(
-                    f"n{n:.02f}\ne{e.item():.01f}\na{a.item():.01f}\nc{c.item():.02f}"
-                )
+            for n, e, a, c in zip(guidance_eval_out["noise_levels"], elevation, azimuth, camera_distances):
+                texts.append(f"n{n:.02f}\ne{e.item():.01f}\na{a.item():.01f}\nc{c.item():.02f}")
             guidance_eval_out.update({"texts": texts})
             guidance_out.update({"eval": guidance_eval_out})
 
@@ -479,24 +369,13 @@ class StableDiffusionGuidance(BaseObject):
 
     @torch.amp.autocast('cuda', enabled=False)
     @torch.no_grad()
-    def get_noise_pred(
-        self,
-        latents_noisy,
-        t,
-        text_embeddings,
-        use_perp_neg=False,
-        neg_guidance_weights=None,
-    ):
+    def get_noise_pred(self, latents_noisy, t, text_embeddings, use_perp_neg=False, neg_guidance_weights=None):
         batch_size = latents_noisy.shape[0]
 
         if use_perp_neg:
             # pred noise
             latent_model_input = torch.cat([latents_noisy] * 4, dim=0)
-            noise_pred = self.forward_unet(
-                latent_model_input,
-                torch.cat([t.reshape(1)] * 4).to(self.device),
-                encoder_hidden_states=text_embeddings,
-            )  # (4B, 3, 64, 64)
+            noise_pred = self.forward_unet(latent_model_input, torch.cat([t.reshape(1)] * 4).to(self.device), encoder_hidden_states=text_embeddings)  # (4B, 3, 64, 64)
 
             noise_pred_text = noise_pred[:batch_size]
             noise_pred_uncond = noise_pred[batch_size : batch_size * 2]
@@ -507,13 +386,9 @@ class StableDiffusionGuidance(BaseObject):
             n_negative_prompts = neg_guidance_weights.shape[-1]
             for i in range(n_negative_prompts):
                 e_i_neg = noise_pred_neg[i::n_negative_prompts] - noise_pred_uncond
-                accum_grad += neg_guidance_weights[:, i].view(
-                    -1, 1, 1, 1
-                ) * perpendicular_component(e_i_neg, e_pos)
+                accum_grad += neg_guidance_weights[:, i].view(-1, 1, 1, 1) * perpendicular_component(e_i_neg, e_pos)
 
-            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-                e_pos + accum_grad
-            )
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (e_pos + accum_grad)
         else:
             # pred noise
             latent_model_input = torch.cat([latents_noisy] * 2, dim=0)
@@ -524,23 +399,13 @@ class StableDiffusionGuidance(BaseObject):
             )
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
-                noise_pred_text - noise_pred_uncond
-            )
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         return noise_pred
 
     @torch.amp.autocast('cuda', enabled=False)
     @torch.no_grad()
-    def guidance_eval(
-        self,
-        t_orig,
-        text_embeddings,
-        latents_noisy,
-        noise_pred,
-        use_perp_neg=False,
-        neg_guidance_weights=None,
-    ):
+    def guidance_eval(self, t_orig, text_embeddings, latents_noisy, noise_pred, use_perp_neg=False, neg_guidance_weights=None):
         # use only 50 timesteps, and find nearest of those to t
         self.scheduler.set_timesteps(50)
         self.scheduler.timesteps_gpu = self.scheduler.timesteps.to(self.device)
@@ -564,9 +429,7 @@ class StableDiffusionGuidance(BaseObject):
         latents_1step = []
         pred_1orig = []
         for b in range(bs):
-            step_output = self.scheduler.step(
-                noise_pred[b : b + 1], t[b], latents_noisy[b : b + 1], eta=1
-            )
+            step_output = self.scheduler.step(noise_pred[b : b + 1], t[b], latents_noisy[b : b + 1], eta=1)
             latents_1step.append(step_output["prev_sample"])
             pred_1orig.append(step_output["pred_original_sample"])
         latents_1step = torch.cat(latents_1step)
@@ -577,23 +440,14 @@ class StableDiffusionGuidance(BaseObject):
         latents_final = []
         for b, i in enumerate(idxs):
             latents = latents_1step[b : b + 1]
-            text_emb = (
-                text_embeddings[
-                    [b, b + len(idxs), b + 2 * len(idxs), b + 3 * len(idxs)], ...
-                ]
-                if use_perp_neg
-                else text_embeddings[[b, b + len(idxs)], ...]
-            )
+            text_emb = text_embeddings[[b, b + len(idxs), b + 2 * len(idxs), b + 3 * len(idxs)], ...] if use_perp_neg else text_embeddings[[b, b + len(idxs)], ...]
+            
             neg_guid = neg_guidance_weights[b : b + 1] if use_perp_neg else None
             for t in tqdm(self.scheduler.timesteps[i + 1 :], leave=False):
                 # pred noise
-                noise_pred = self.get_noise_pred(
-                    latents, t, text_emb, use_perp_neg, neg_guid
-                )
+                noise_pred = self.get_noise_pred(latents, t, text_emb, use_perp_neg, neg_guid)
                 # get prev latent
-                latents = self.scheduler.step(noise_pred, t, latents, eta=1)[
-                    "prev_sample"
-                ]
+                latents = self.scheduler.step(noise_pred, t, latents, eta=1)["prev_sample"]
             latents_final.append(latents)
 
         latents_final = torch.cat(latents_final)

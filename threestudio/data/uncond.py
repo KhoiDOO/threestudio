@@ -14,13 +14,7 @@ from threestudio import register
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_device
-from threestudio.utils.ops import (
-    get_full_projection_matrix,
-    get_mvp_matrix,
-    get_projection_matrix,
-    get_ray_directions,
-    get_rays,
-)
+from threestudio.utils.ops import get_full_projection_matrix, get_mvp_matrix, get_projection_matrix, get_ray_directions, get_rays
 from threestudio.utils.typing import *
 
 
@@ -40,10 +34,7 @@ class RandomCameraDataModuleConfig:
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
-    fovy_range: Tuple[float, float] = (
-        40,
-        70,
-    )  # in degrees, in vertical direction (along height)
+    fovy_range: Tuple[float, float] = (40, 70)  # in degrees, in vertical direction (along height)
     camera_perturb: float = 0.1
     center_perturb: float = 0.2
     up_perturb: float = 0.02
@@ -63,9 +54,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg: Any) -> None:
         super().__init__()
         self.cfg: RandomCameraDataModuleConfig = cfg
-        self.heights: List[int] = (
-            [self.cfg.height] if isinstance(self.cfg.height, int) else self.cfg.height
-        )
+        self.heights: List[int] = [self.cfg.height] if isinstance(self.cfg.height, int) else self.cfg.height
         self.widths: List[int] = (
             [self.cfg.width] if isinstance(self.cfg.width, int) else self.cfg.width
         )
@@ -82,9 +71,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             and len(self.batch_sizes) == 1
         ):
             if len(self.cfg.resolution_milestones) > 0:
-                threestudio.warn(
-                    "Ignoring resolution_milestones since height and width are not changing"
-                )
+                threestudio.warn("Ignoring resolution_milestones since height and width are not changing")
             self.resolution_milestones = [-1]
         else:
             assert len(self.heights) == len(self.cfg.resolution_milestones) + 1
@@ -109,9 +96,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
         self.width = self.widths[size_ind]
         self.batch_size = self.batch_sizes[size_ind]
         self.directions_unit_focal = self.directions_unit_focals[size_ind]
-        threestudio.debug(
-            f"Training height: {self.height}, width: {self.width}, batch_size: {self.batch_size}"
-        )
+        threestudio.debug(f"Training height: {self.height}, width: {self.width}, batch_size: {self.batch_size}")
         # progressive view
         self.progressive_view(global_step)
 
@@ -213,9 +198,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
         # default scene center at origin
         center: Float[Tensor, "B 3"] = torch.zeros_like(camera_positions)
         # default camera up direction as +z
-        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
-            None, :
-        ].repeat(self.batch_size, 1)
+        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[None, :].repeat(self.batch_size, 1)
 
         # sample camera perturbations from a uniform distribution [-camera_perturb, camera_perturb]
         camera_perturb: Float[Tensor, "B 3"] = (
@@ -235,10 +218,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
         up = up + up_perturb
 
         # sample fovs from a uniform distribution bounded by fov_range
-        fovy_deg: Float[Tensor, "B"] = (
-            torch.rand(self.batch_size) * (self.fovy_range[1] - self.fovy_range[0])
-            + self.fovy_range[0]
-        )
+        fovy_deg: Float[Tensor, "B"] = torch.rand(self.batch_size) * (self.fovy_range[1] - self.fovy_range[0]) + self.fovy_range[0]
         fovy = fovy_deg * math.pi / 180
 
         # sample light distance from a uniform distribution bounded by light_distance_range
@@ -256,9 +236,8 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
                 dim=-1,
             )
             # get light position by scaling light direction by light distance
-            light_positions: Float[Tensor, "B 3"] = (
-                light_direction * light_distances[:, None]
-            )
+            light_positions: Float[Tensor, "B 3"] = light_direction * light_distances[:, None]
+
         elif self.cfg.light_sample_strategy == "magic3d":
             # sample light direction within restricted angle range (pi/3)
             local_z = F.normalize(camera_positions, dim=-1)
@@ -271,12 +250,8 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             )
             local_y = F.normalize(torch.cross(local_z, local_x, dim=-1), dim=-1)
             rot = torch.stack([local_x, local_y, local_z], dim=-1)
-            light_azimuth = (
-                torch.rand(self.batch_size) * math.pi * 2 - math.pi
-            )  # [-pi, pi]
-            light_elevation = (
-                torch.rand(self.batch_size) * math.pi / 3 + math.pi / 6
-            )  # [pi/6, pi/2]
+            light_azimuth = torch.rand(self.batch_size) * math.pi * 2 - math.pi # [-pi, pi]
+            light_elevation = torch.rand(self.batch_size) * math.pi / 3 + math.pi / 6 # [pi/6, pi/2]
             light_positions_local = torch.stack(
                 [
                     light_distances
@@ -291,9 +266,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             )
             light_positions = (rot @ light_positions_local[:, :, None])[:, :, 0]
         else:
-            raise ValueError(
-                f"Unknown light sample strategy: {self.cfg.light_sample_strategy}"
-            )
+            raise ValueError(f"Unknown light sample strategy: {self.cfg.light_sample_strategy}")
 
         lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
         right: Float[Tensor, "B 3"] = F.normalize(torch.cross(lookat, up), dim=-1)
@@ -302,28 +275,18 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
             dim=-1,
         )
-        c2w: Float[Tensor, "B 4 4"] = torch.cat(
-            [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
-        )
+        c2w: Float[Tensor, "B 4 4"] = torch.cat([c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1)
         c2w[:, 3, 3] = 1.0
 
         # get directions by dividing directions_unit_focal by focal length
         focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
-        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
-            None, :, :, :
-        ].repeat(self.batch_size, 1, 1, 1)
-        directions[:, :, :, :2] = (
-            directions[:, :, :, :2] / focal_length[:, None, None, None]
-        )
+        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[None, :, :, :].repeat(self.batch_size, 1, 1, 1)
+        directions[:, :, :, :2] = directions[:, :, :, :2] / focal_length[:, None, None, None]
 
         # Importance note: the returned rays_d MUST be normalized!
-        rays_o, rays_d = get_rays(
-            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
-        )
+        rays_o, rays_d = get_rays(directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize)
 
-        self.proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
-            fovy, self.width / self.height, 0.01, 100.0
-        )  # FIXME: hard-coded near and far
+        self.proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(fovy, self.width / self.height, 0.01, 100.0)  # FIXME: hard-coded near and far
         mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, self.proj_mtx)
         self.fovy = fovy
 

@@ -29,17 +29,13 @@ class DreamFusion(BaseLift3DSystem):
     def on_fit_start(self) -> None:
         super().on_fit_start()
         # only used in training
-        self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
-            self.cfg.prompt_processor
-        )
+        self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(self.cfg.prompt_processor)
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
     def training_step(self, batch, batch_idx):
         out = self(batch)
         prompt_utils = self.prompt_processor()
-        guidance_out = self.guidance(
-            out["comp_rgb"], prompt_utils, **batch, rgb_as_latents=False
-        )
+        guidance_out = self.guidance(out["comp_rgb"], prompt_utils, **batch, rgb_as_latents=False)
 
         loss = 0.0
 
@@ -51,13 +47,8 @@ class DreamFusion(BaseLift3DSystem):
 
         if self.C(self.cfg.loss.lambda_orient) > 0:
             if "normal" not in out:
-                raise ValueError(
-                    "Normal is required for orientation loss, no normal is found in the output."
-                )
-            loss_orient = (
-                out["weights"].detach()
-                * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2
-            ).sum() / (out["opacity"] > 0).sum()
+                raise ValueError("Normal is required for orientation loss, no normal is found in the output.")
+            loss_orient = (out["weights"].detach() * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2).sum() / (out["opacity"] > 0).sum()
             self.log("train/loss_orient", loss_orient)
             loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
 
@@ -110,8 +101,7 @@ class DreamFusion(BaseLift3DSystem):
                     "kwargs": {"cmap": None, "data_range": (0, 1)},
                 },
             ],
-            name="validation_step",
-            step=self.true_global_step,
+            name="validation_step", step=self.true_global_step
         )
 
     def on_validation_epoch_end(self):
